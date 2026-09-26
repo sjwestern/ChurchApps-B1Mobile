@@ -5,6 +5,7 @@ import { UserHelper } from "./UserHelper";
 import { ChurchInterface, LinkInterface } from "./Interfaces";
 import { Permissions } from "@churchapps/helpers";
 import { useUserStore } from "../stores/useUserStore";
+import { WebViewAllowlist } from "./WebViewAllowlist";
 
 export class NavigationUtils {
   static navigateToScreen(item: LinkInterface, currentChurch?: ChurchInterface) {
@@ -17,8 +18,7 @@ export class NavigationUtils {
         break;
       }
       case "lessons": {
-        const jwt = uc?.jwt;
-        router.push({ pathname: "/lessonRoot", params: { url: EnvironmentHelper.LessonsRoot + "/login?jwt=" + jwt + "&returnUrl=/b1/person&churchId=" + currentChurch?.id, title: item.text } });
+        router.push({ pathname: "/lessonRoot", params: { url: EnvironmentHelper.LessonsRoot + "/login?returnUrl=/b1/person&churchId=" + currentChurch?.id, title: item.text } });
         break;
       }
       case "bible": {
@@ -42,7 +42,11 @@ export class NavigationUtils {
       }
       case "url": {
         UserHelper.addOpenScreenEvent("WebsiteScreen");
-        router.push({ pathname: "/websiteUrlRoot", params: { url: item.url, title: item.text } });
+        if (WebViewAllowlist.isAllowedUrl(item.url)) {
+          router.push({ pathname: "/websiteUrlRoot", params: { url: item.url, title: item.text } });
+        } else if (WebViewAllowlist.isSafeExternalUrl(item.url)) {
+          Linking.openURL(item.url || "");
+        }
         break;
       }
       case "page": {
@@ -103,14 +107,9 @@ export class NavigationUtils {
 
   private static handleDonationNavigation(currentChurch?: ChurchInterface) {
     UserHelper.addOpenScreenEvent("DonationScreen");
-    const uc = useUserStore.getState().currentUserChurch;
 
     if (Platform.OS === "ios") {
-      let url = "https://" + currentChurch?.subDomain + ".b1.church/login/?returnUrl=%2Fdonate";
-      if (uc?.jwt) {
-        url += "&jwt=" + uc.jwt;
-      }
-      Linking.openURL(url);
+      Linking.openURL("https://" + currentChurch?.subDomain + ".b1.church/login/?returnUrl=%2Fdonate");
     } else {
       router.push("/donationRoot");
     }

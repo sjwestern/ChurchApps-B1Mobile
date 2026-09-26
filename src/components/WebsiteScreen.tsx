@@ -5,7 +5,7 @@ import WebView from "react-native-webview";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { DrawerNavigationProp } from "@react-navigation/drawer";
 import { useTranslation } from "react-i18next";
-import { ApiHelper, globalStyles, SecureStorageHelper } from "../../src/helpers";
+import { ApiHelper, globalStyles, prepareWebViewAuth, SecureStorageHelper, WebViewAllowlist } from "../../src/helpers";
 import { MainHeader } from "./wrapper/MainHeader";
 import { UserHelper } from "../helpers/UserHelper";
 import { eventBus } from "@/helpers/PushNotificationHelper";
@@ -16,9 +16,10 @@ import { useThemeColors } from "../theme";
 interface WebsiteScreenProps {
   url: string;
   title: string;
+  sessionJwt?: string;
 }
 
-export function WebsiteScreen({ url, title }: WebsiteScreenProps) {
+export function WebsiteScreen({ url, title, sessionJwt }: WebsiteScreenProps) {
   const { t } = useTranslation();
   const colors = useThemeColors();
   const navigation = useNavigation<DrawerNavigationProp<any>>();
@@ -28,13 +29,17 @@ export function WebsiteScreen({ url, title }: WebsiteScreenProps) {
   const webviewRef = useRef<WebView>(null);
   const navigationMain = useNavigation();
   const authStore = useAuthStore;
+  const pageUrl = WebViewAllowlist.normalizeUrl(url);
+  const webViewAuth = prepareWebViewAuth(pageUrl, sessionJwt);
 
   useEffect(() => {
-    // Utilities.trackEvent('Website Screen', { url });
-    UserHelper.addOpenScreenEvent("Website Screen", { url });
-
+    UserHelper.addOpenScreenEvent("Website Screen", { url: webViewAuth.uri });
+    if (!WebViewAllowlist.isAllowedUrl(pageUrl)) {
+      if (router.canGoBack()) router.back();
+      return;
+    }
     const timer = setTimeout(() => {
-      setCurrentUrl(url);
+      setCurrentUrl(webViewAuth.uri);
     }, 300);
     return () => clearTimeout(timer);
   }, []);
@@ -47,20 +52,10 @@ export function WebsiteScreen({ url, title }: WebsiteScreenProps) {
   );
 
   const handleMessage = (event: any) => {
-    const message = JSON.parse(event.nativeEvent.data);
-
-    if (message.event === "profile_updated") {
-      manageUserUpdate();
-      return;
-    }
-
-    if (message.event === "profile_deleted") {
-      eventBus.emit("do_logout");
-      return;
-    }
-
-    const newUrl = currentUrl + "&autoPrint=1";
-    Linking.openURL(newUrl);
+    const message = WebViewAllowlist.acceptedMessage(event?.nativeEvent?.url, event?.nativeEvent?.data);
+    if (!message) return;
+    if (message.event === "profile_updated") manageUserUpdate();
+    if (message.event === "profile_deleted") eventBus.emit("do_logout");
   };
 
   const manageUserUpdate = async () => {
@@ -95,8 +90,7 @@ export function WebsiteScreen({ url, title }: WebsiteScreenProps) {
 
   const handleWebViewNavigationStateChange = (event: { url: string }) => {
     const { url } = event;
-
-    // Dynamically extract base URL
+    if (!WebViewAllowlist.isAllowedUrl(url)) return false;
     const baseUrlMatch = url.match(/^(https?:\/\/[^/]+)/);
     const baseUrl = baseUrlMatch ? baseUrlMatch[1] : "";
 
@@ -127,14 +121,24 @@ export function WebsiteScreen({ url, title }: WebsiteScreenProps) {
     return true;
   };
 
+  const handleShouldStartLoadWithRequest = (request: { url: string; isTopFrame?: boolean }) => {
+    if (!WebViewAllowlist.shouldLoadInWebView(request)) {
+      if (WebViewAllowlist.isSafeExternalUrl(request.url)) Linking.openURL(request.url);
+      return false;
+    }
+    return handleWebViewNavigationStateChange(request);
+  };
+
   return (
     <View style={[globalStyles.homeContainer, { backgroundColor: colors.surface }]}>
       <MainHeader title={title || "Home"} openDrawer={() => navigation.dispatch(DrawerActions.openDrawer())} back={() => router.back()} />
       <View style={globalStyles.webViewContainer} onLayout={() => setIsLayoutReady(true)}>
-        {isLayoutReady && (
+        {isLayoutReady && currentUrl && (
           <WebView
-            source={currentUrl ? { uri: url } : undefined}
+            source={{ uri: currentUrl }}
             ref={webviewRef}
+            sharedCookiesEnabled={true}
+            injectedJavaScriptBeforeContentLoaded={webViewAuth.script}
             onMessage={handleMessage}
             renderError={() => (
               <View>
@@ -147,7 +151,7 @@ export function WebsiteScreen({ url, title }: WebsiteScreenProps) {
             allowsInlineMediaPlayback={true}
             allowsBackForwardNavigationGestures={true}
             mediaPlaybackRequiresUserAction={false}
-            // onShouldStartLoadWithRequest={handleWebViewNavigationStateChange}
+            onShouldStartLoadWithRequest={handleShouldStartLoadWithRequest}
             onNavigationStateChange={handleWebViewNavigationStateChange}
           />
         )}
